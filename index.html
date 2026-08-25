@@ -210,7 +210,20 @@
 		</div>
 	</div>
 
+	<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+	<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 	<script>
+		const firebaseConfig = {
+			apiKey: 'AIzaSyBKiYLQVx2GrpuMahy91zPWgJm4bveAkzQ',
+			authDomain: 'elora-952ea.firebaseapp.com',
+			projectId: 'elora-952ea',
+			storageBucket: 'elora-952ea.firebasestorage.app',
+			messagingSenderId: '615971079074',
+			appId: '1:615971079074:web:38583e8bf534e789e2a8fb',
+			measurementId: 'G-0V5F74H9GL'
+		};
+		firebase.initializeApp(firebaseConfig);
+		const sharedDatabase = firebase.database();
 		const entryScreen = document.querySelector('#entry-screen');
 		const lampButton = document.querySelector('#lamp-button');
 		const loginForm = document.querySelector('#login-form');
@@ -241,8 +254,6 @@
 		});
 
 		let media = { photos: [], videos: [] };
-		const databaseName = 'elora-memory-library';
-		const databaseVersion = 1;
 		const folderList = document.querySelector('#folder-list');
 		const memoryView = document.querySelector('#memory-view');
 		const lightbox = document.querySelector('#lightbox');
@@ -250,38 +261,13 @@
 		const viewerTitle = document.querySelector('#viewer-title');
 		const viewerDate = document.querySelector('#viewer-date');
 
-		function openDatabase() {
-			return new Promise((resolve, reject) => {
-				const request = indexedDB.open(databaseName, databaseVersion);
-				request.onupgradeneeded = () => request.result.createObjectStore('uploads', { keyPath: 'id', autoIncrement: true });
-				request.onsuccess = () => resolve(request.result);
-				request.onerror = () => reject(request.error);
+		async function loadSavedUploads() {
+			const snapshot = await sharedDatabase.ref('memories').once('value');
+			const savedMemories = snapshot.val() || {};
+			Object.values(savedMemories).forEach(upload => {
+				if (media[upload.folder]) media[upload.folder].push([upload.src, upload.title, 'Shared memory', upload.type]);
 			});
-		}
-
-		function saveUpload(file, folder) {
-			return openDatabase().then(database => new Promise((resolve, reject) => {
-				const transaction = database.transaction('uploads', 'readwrite');
-				transaction.objectStore('uploads').add({ folder, title: file.name, type: file.type, blob: file });
-				transaction.oncomplete = () => { database.close(); resolve(); };
-				transaction.onerror = () => { database.close(); reject(transaction.error); };
-			}));
-		}
-
-		function loadSavedUploads() {
-			return openDatabase().then(database => new Promise((resolve, reject) => {
-				const request = database.transaction('uploads', 'readonly').objectStore('uploads').getAll();
-				request.onsuccess = () => {
-					request.result.forEach(upload => {
-						if (!media[upload.folder]) return;
-						media[upload.folder].push([URL.createObjectURL(upload.blob), upload.title, 'Saved memory', upload.type]);
-					});
-					database.close();
-					updateCounts();
-					resolve();
-				};
-				request.onerror = () => { database.close(); reject(request.error); };
-			}));
+			updateCounts();
 		}
 
 		function updateCounts() {
@@ -315,10 +301,26 @@
 			lightbox.classList.add('open');
 		}
 
+		function fileToDataUrl(file) {
+			return new Promise((resolve, reject) => {
+				const reader = new FileReader();
+				reader.onload = () => resolve(reader.result);
+				reader.onerror = () => reject(reader.error);
+				reader.readAsDataURL(file);
+			});
+		}
+
 		async function addUploads(input, folder, isVideo) {
 			for (const file of Array.from(input.files)) {
-				media[folder].push([URL.createObjectURL(file), file.name, 'Uploaded just now', file.type]);
-				try { await saveUpload(file, folder); } catch (error) { console.error('Could not save upload', error); }
+				try {
+					if (file.size > 7 * 1024 * 1024) throw new Error('File is larger than 7 MB');
+					const source = await fileToDataUrl(file);
+					await sharedDatabase.ref('memories').push({ folder, src: source, title: file.name, type: file.type });
+					media[folder].push([source, file.name, 'Shared memory', file.type]);
+				} catch (error) {
+					console.error('Could not upload memory', error);
+					loginMessage.textContent = error.message.includes('7 MB') ? 'Please choose a file smaller than 7 MB.' : 'Upload could not be shared. Check database rules.';
+				}
 			}
 			updateCounts();
 			input.value = '';
